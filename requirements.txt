@@ -1,0 +1,7 @@
+streamlit
+crewai==1.7.2
+openai==1.83.0
+litellm==1.52.1
+pydantic
+pymupdf
+python-docx
