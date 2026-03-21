@@ -9,7 +9,6 @@ from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
-
 def extract_paper_sections(text: str) -> dict:
     """
     Deterministically split a scientific paper into sections.
@@ -19,13 +18,22 @@ def extract_paper_sections(text: str) -> dict:
     title_snippet = text[:500].strip() if text else None
 
     # Normalize text for heading detection
-    normalized = re.sub(r'\s+', ' ', text)
+    normalized = re.sub(r"\s+", " ", text)
     lowered = normalized.lower()
 
     CANONICAL_SECTIONS = {
         "abstract": ["abstract"],
         "introduction": ["introduction", "background"],
-        "methods": ["methods", "materials and methods", "methodology"],
+        "methods": [
+            "methods",
+            "materials and methods",
+            "methodology",
+            "study design",
+            "participants",
+            "dietary intervention",
+            "collection of dietary intake",
+            "anthropometric and metabolic data",
+        ],
         "results": ["results", "findings"],
         "discussion": ["discussion"],
         "conclusion": ["conclusion", "conclusions"],
@@ -34,16 +42,16 @@ def extract_paper_sections(text: str) -> dict:
             "conflicts of interest",
             "conflict of interest",
             "competing interests",
-            "disclosure"
-        ]
+            "disclosure",
+        ],
     }
-    
+
     # Find all candidate headings with positions
     heading_positions = []
 
     for section, variants in CANONICAL_SECTIONS.items():
         for v in variants:
-            pattern = rf'\b{re.escape(v)}\b'
+            pattern = rf"\b{re.escape(v)}\b"
             for m in re.finditer(pattern, lowered):
                 heading_positions.append((m.start(), section))
 
@@ -60,7 +68,11 @@ def extract_paper_sections(text: str) -> dict:
 
     # Slice text between headings
     for i, (start_idx, section_name) in enumerate(heading_positions):
-        end_idx = heading_positions[i + 1][0] if i + 1 < len(heading_positions) else len(normalized)
+        end_idx = (
+            heading_positions[i + 1][0]
+            if i + 1 < len(heading_positions)
+            else len(normalized)
+        )
         section_text = normalized[start_idx:end_idx].strip()
 
         # Only keep the *first* occurrence of each section
@@ -74,16 +86,25 @@ def clean_text_for_llm(raw_text: str) -> str:
     """Normalize text for LLM JSON generation."""
     # Replace common PDF Unicode issues
     replacements = {
-        '“': '"', '”': '"', '‘': "'", '’': "'",
-        '—': '-', '–': '-', ' ': ' ', '\u00a0': ' ',  # Non-breaking space
-        '\t': ' ', '\n': ' ', '\r': ' '
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "—": "-",
+        "–": "-",
+        " ": " ",
+        "\u00a0": " ",  # Non-breaking space
+        "\t": " ",
+        "\n": " ",
+        "\r": " ",
     }
     for bad, good in replacements.items():
         raw_text = raw_text.replace(bad, good)
-    
+
     # Remove all control characters except basic whitespace
-    cleaned = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', ' ', raw_text)
-    return ' '.join(cleaned.split())  # Normalize whitespace
+    cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", raw_text)
+    return " ".join(cleaned.split())  # Normalize whitespace
+
 
 def extract_text_from_pdf(pdf_path: str) -> str:
     """Extracts text from a PDF file using PyMuPDF."""
@@ -103,7 +124,7 @@ def process_zip_file(uploaded_file) -> list:
     Returns: [{'filename': str, 'content': str}, ...]
     """
     papers_data = []
-    
+
     with tempfile.TemporaryDirectory() as temp_dir:
         zip_path = os.path.join(temp_dir, "upload.zip")
         extract_dir = os.path.join(temp_dir, "extracted")
@@ -111,10 +132,10 @@ def process_zip_file(uploaded_file) -> list:
 
         with open(zip_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(temp_dir)
-            
+
             for root, _, files in os.walk(temp_dir):
                 for file in files:
                     # Filter for PDFs and ignore hidden files
@@ -123,13 +144,10 @@ def process_zip_file(uploaded_file) -> list:
                         text_content = extract_text_from_pdf(full_path)
                     if not file.lower().endswith(".pdf"):
                         continue
-                        
+
                     sections = extract_paper_sections(text_content)
 
-                    papers_data.append({
-                        "filename": file,
-                        "sections": sections
-                    })
+                    papers_data.append({"filename": file, "sections": sections})
     return papers_data
 
 
@@ -139,9 +157,9 @@ def generate_docx_report(results: list) -> BytesIO:
     Returns a BytesIO object containing the .docx file.
     """
     doc = Document()
-    
+
     # --- Title Page ---
-    title = doc.add_heading('Nutrition Science Analysis Report', 0)
+    title = doc.add_heading("Nutrition Science Analysis Report", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph(f"Total Papers Analyzed: {len(results)}")
     doc.add_page_break()
@@ -149,28 +167,30 @@ def generate_docx_report(results: list) -> BytesIO:
     # --- Loop through each paper ---
     for i, res in enumerate(results):
         # SAFER title logic - check title first, fallback to index/fallback
-        if hasattr(res, 'title') and res.title and res.title.strip():
+        if hasattr(res, "title") and res.title and res.title.strip():
             paper_title = res.title[:100]  # Truncate long titles
         else:
-            paper_title = f"Paper {i+1} ({get_filename_fallback(res)})"
-            
+            paper_title = f"Paper {i + 1} ({get_filename_fallback(res)})"
+
         header = doc.add_heading(paper_title, level=1)
-        
+
         # Sub-header details using exact schema fields
         p = doc.add_paragraph()
         p.add_run(f"Type: {getattr(res, 'paper_type', 'N/A')} | ").bold = True
-        p.add_run(f"Evidence Level: {getattr(res, 'evidence_level', 'N/A')} | ").bold = True
-        
+        p.add_run(
+            f"Evidence Level: {getattr(res, 'evidence_level', 'N/A')} | "
+        ).bold = True
+
         # Safe trust score access
-        trust_score = getattr(res, 'trust_score', 0)
+        trust_score = getattr(res, "trust_score", 0)
         run = p.add_run(f"Trust Score: {trust_score}/10")
         run.bold = True
         if isinstance(trust_score, (int, float)) and trust_score < 5:
             run.font.color.rgb = RGBColor(255, 0, 0)
-        
+
         # 1. Conflicts of Interest
-        doc.add_heading('💰 Conflicts of Interest & Funding', level=2)
-        has_coi = getattr(res, 'has_conflict_of_interest', None)
+        doc.add_heading("💰 Conflicts of Interest & Funding", level=2)
+        has_coi = getattr(res, "has_conflict_of_interest", None)
 
         if has_coi:
             p = doc.add_paragraph()
@@ -185,23 +205,45 @@ def generate_docx_report(results: list) -> BytesIO:
             doc.add_paragraph("Conflict of interest statement NOT REPORTED.")
 
         # 2. Methodology
-        doc.add_heading('🔬 Methodology Audit', level=2)
-        doc.add_paragraph(f"Control Group: {getattr(res, 'control_group_quality', 'N/A')}", style='List Bullet')
-        doc.add_paragraph(f"Intervention: {getattr(res, 'intervention_details', 'N/A')}", style='List Bullet')
-        doc.add_paragraph(f"Confounders: {getattr(res, 'confounding_factors', 'N/A')}", style='List Bullet')
+        doc.add_heading("🔬 Methodology Audit", level=2)
+        doc.add_paragraph(
+            f"Control Group: {getattr(res, 'control_group_quality', 'N/A')}",
+            style="List Bullet",
+        )
+        doc.add_paragraph(
+            f"Intervention: {getattr(res, 'intervention_details', 'N/A')}",
+            style="List Bullet",
+        )
+        doc.add_paragraph(
+            f"Confounders: {getattr(res, 'confounding_factors', 'N/A')}",
+            style="List Bullet",
+        )
 
         # 3. Statistics
-        doc.add_heading('📈 Statistical Analysis', level=2)
-        doc.add_paragraph(f"Primary Outcome: {getattr(res, 'primary_outcome', 'N/A')}", style='List Bullet')
-        doc.add_paragraph(f"Risk Reported: {getattr(res, 'risk_type_reported', 'N/A')}", style='List Bullet')
-        doc.add_paragraph(f"Endpoints: {getattr(res, 'endpoints', 'N/A')}", style='List Bullet')
-        doc.add_paragraph(f"Significance: {getattr(res, 'statistical_significance', 'N/A')}", style='List Bullet')
+        doc.add_heading("📈 Statistical Analysis", level=2)
+        doc.add_paragraph(
+            f"Primary Outcome: {getattr(res, 'primary_outcome', 'N/A')}",
+            style="List Bullet",
+        )
+        doc.add_paragraph(
+            f"Risk Reported: {getattr(res, 'risk_type_reported', 'N/A')}",
+            style="List Bullet",
+        )
+        doc.add_paragraph(
+            f"Endpoints: {getattr(res, 'endpoints', 'N/A')}", style="List Bullet"
+        )
+        doc.add_paragraph(
+            f"Significance: {getattr(res, 'statistical_significance', 'N/A')}",
+            style="List Bullet",
+        )
 
         # 4. Conclusions
-        doc.add_heading('🏁 Conclusions & Verdict', level=2)
-        doc.add_paragraph(f"Authors' Conclusion: {getattr(res, 'conclusion_summary', 'N/A')}")
-        doc.add_paragraph(getattr(res, 'final_verdict', 'N/A'), style='List Bullet')
-        
+        doc.add_heading("🏁 Conclusions & Verdict", level=2)
+        doc.add_paragraph(
+            f"Authors' Conclusion: {getattr(res, 'conclusion_summary', 'N/A')}"
+        )
+        doc.add_paragraph(getattr(res, "final_verdict", "N/A"), style="List Bullet")
+
         # Separator between papers
         doc.add_page_break()
 
@@ -216,8 +258,8 @@ def get_filename_fallback(res) -> str:
     # Common patterns where filename might be stored
     try:
         # Option 1: Check if results have filename from process_zip_file
-        if hasattr(res, 'filename') and res.filename:
-            return res.filename.replace('.pdf', '').title()
+        if hasattr(res, "filename") and res.filename:
+            return res.filename.replace(".pdf", "").title()
         # Option 2: Use generic fallback
         return "Untitled Analysis"
     except:

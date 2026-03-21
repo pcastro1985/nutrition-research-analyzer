@@ -2,3 +2,5 @@ venv
 src/__pycache__
 reports
 src/delete.py
+src/credentials.py
+__pycache__
